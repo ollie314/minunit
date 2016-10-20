@@ -29,6 +29,10 @@
 
 #if defined(_WIN32)
 #include <Windows.h>
+#if defined(_MSC_VER) && _MSC_VER < 1900
+  #define snprintf _snprintf
+  #define __func__ __FUNCTION__
+#endif
 
 #elif defined(__unix__) || defined(__unix) || defined(unix) || (defined(__APPLE__) && defined(__MACH__))
 
@@ -75,8 +79,8 @@ static double minunit_proc_timer = 0;
 static char minunit_last_message[MINUNIT_MESSAGE_LEN];
 
 /*  Test setup and teardown function pointers */
-static void (*minunit_setup)(void) = NULL;
-static void (*minunit_teardown)(void) = NULL;
+static void (*minunit_setup)() = NULL;
+static void (*minunit_teardown)() = NULL;
 
 /*  Definitions */
 #define MU_TEST(method_name) static void method_name()
@@ -101,7 +105,7 @@ static void (*minunit_teardown)(void) = NULL;
 
 /*  Test runner */
 #define MU_RUN_TEST(test) MU__SAFE_BLOCK(\
-	if (minunit_real_timer==0 && minunit_real_timer==0) {\
+	if (minunit_real_timer==0 && minunit_proc_timer==0) {\
 		minunit_real_timer = mu_timer_real();\
 		minunit_proc_timer = mu_timer_cpu();\
 	}\
@@ -206,17 +210,17 @@ static void (*minunit_teardown)(void) = NULL;
 static double mu_timer_real( )
 {
 #if defined(_WIN32)
-	FILETIME tm;
-	ULONGLONG t;
-#if defined(NTDDI_WIN8) && NTDDI_VERSION >= NTDDI_WIN8
-	/* Windows 8, Windows Server 2012 and later. ---------------- */
-	GetSystemTimePreciseAsFileTime( &tm );
-#else
 	/* Windows 2000 and later. ---------------------------------- */
-	GetSystemTimeAsFileTime( &tm );
-#endif
-	t = ((ULONGLONG)tm.dwHighDateTime << 32) | (ULONGLONG)tm.dwLowDateTime;
-	return (double)t / 10000000.0;
+	LARGE_INTEGER Time;
+	LARGE_INTEGER Frequency;
+	
+	QueryPerformanceFrequency(&Frequency);
+	QueryPerformanceCounter(&Time);
+	
+	Time.QuadPart *= 1000000;
+	Time.QuadPart /= Frequency.QuadPart;
+	
+	return (double)Time.QuadPart / 1000000.0;
 
 #elif (defined(__hpux) || defined(hpux)) || ((defined(__sun__) || defined(__sun) || defined(sun)) && (defined(__SVR4) || defined(__svr4__)))
 	/* HP-UX, Solaris. ------------------------------------------ */
@@ -286,15 +290,14 @@ static double mu_timer_cpu( )
 	FILETIME exitTime;
 	FILETIME kernelTime;
 	FILETIME userTime;
+
+	/* This approach has a resolution of 1/64 second. Unfortunately, Windows' API does not offer better */
 	if ( GetProcessTimes( GetCurrentProcess( ),
-		&createTime, &exitTime, &kernelTime, &userTime ) != -1 )
+		&createTime, &exitTime, &kernelTime, &userTime ) != 0 )
 	{
-		SYSTEMTIME userSystemTime;
-		if ( FileTimeToSystemTime( &userTime, &userSystemTime ) != -1 )
-			return (double)userSystemTime.wHour * 3600.0 +
-				(double)userSystemTime.wMinute * 60.0 +
-				(double)userSystemTime.wSecond +
-				(double)userSystemTime.wMilliseconds / 1000.0;
+		ULARGE_INTEGER userSystemTime;
+		memcpy(&userSystemTime, &userTime, sizeof(ULARGE_INTEGER));
+		return (double)userSystemTime.QuadPart / 10000000.0;
 	}
 
 #elif defined(__unix__) || defined(__unix) || defined(unix) || (defined(__APPLE__) && defined(__MACH__))
